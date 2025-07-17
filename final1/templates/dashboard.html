@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Operator Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0f2f5; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .alert-critical { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } }
+        .task-carousel-wrapper { overflow: hidden; }
+        .task-card-container { display: flex; transition: transform 0.5s ease-in-out; }
+        .task-card { flex-shrink: 0; width: 100%; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto">
+        <header class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Operator Dashboard</h1>
+                <p class="text-gray-500">Machine: <span id="machine-id-display">--</span> | Operator: <span id="operator-name-display">--</span></p>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="/scheduler" class="bg-yellow-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-yellow-600 shadow-sm"><i class="fas fa-calendar-alt mr-2"></i>View Schedule</a>
+                <a href="/logout" class="bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 shadow-sm"><i class="fas fa-sign-out-alt mr-2"></i>Logout</a>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2 card p-8 flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">Today's Tasks</h2>
+                    <div class="flex items-center gap-2">
+                        <button id="prev-task-btn" class="p-2 rounded-full bg-gray-100 hover:bg-gray-200"><i class="fas fa-arrow-left"></i></button>
+                        <span id="task-counter" class="font-semibold text-gray-600"></span>
+                        <button id="next-task-btn" class="p-2 rounded-full bg-gray-100 hover:bg-gray-200"><i class="fas fa-arrow-right"></i></button>
+                    </div>
+                </div>
+                <div id="task-carousel-wrapper" class="task-carousel-wrapper flex-grow flex items-center justify-center"></div>
+            </div>
+
+            <div class="flex flex-col gap-6">
+                <div id="safety-card" class="card p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Safety Status</h2>
+                    <div id="safety-alerts-container" class="space-y-3"></div>
+                </div>
+                <div class="card p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Actions</h2>
+                    <div class="space-y-3">
+                        <button onclick="openTrainingModal()" class="w-full bg-blue-100 text-blue-700 font-bold py-3 px-4 rounded-lg hover:bg-blue-200 flex items-center"><i class="fas fa-graduation-cap w-6 mr-3"></i>E-Learning</button>
+                        <button onclick="openReportIssueModal()" class="w-full bg-red-100 text-red-700 font-bold py-3 px-4 rounded-lg hover:bg-red-200 flex items-center"><i class="fas fa-exclamation-triangle w-6 mr-3"></i>Report an Issue</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-container"></div>
+    <svg width="0" height="0" style="position:absolute"><defs>
+        <symbol id="icon-seatbelt" viewBox="0 0 24 24"><path fill="currentColor" d="M16,13.5L12,17.5L8,13.5H2V11.5H8.2L12,15.3L15.8,11.5H22V13.5H16M12,2L1,9H4V22H10V14H14V22H20V9H23L12,2Z"/></symbol>
+        <symbol id="icon-tilt" viewBox="0 0 24 24"><path fill="currentColor" d="M2.7,14.3L5.5,19H18.5L21.3,14.3C21.7,13.5 21.2,12.5 20.4,12.5H3.6C2.8,12.5 2.3,13.5 2.7,14.3M18.8,11.5L16,5H8L5.2,11.5H18.8Z"/></symbol>
+        <symbol id="icon-visibility" viewBox="0 0 24 24"><path fill="currentColor" d="M2,5.27L3.28,4L20,20.72L18.73,22L15.65,18.92C14.5,19.58 13.28,20 12,20A10,10 0 0,1 2,12C3.18,9.27 5.06,7.14 7.41,5.85L2,5.27M12,9A3,3 0 0,1 15,12C15,12.35 14.94,12.69 14.83,13L11,9.17C11.31,9.06 11.65,9 12,9M12,4.5C17,4.5 21.27,7.61 23,12C22.18,14.08 20.79,15.83 19,17.07L17.58,15.65C18.8,14.74 19.81,13.47 20.5,12C19.27,9 15.73,6.5 12,6.5C10.91,6.5 9.89,6.72 8.93,7.1L7.17,5.35C8.69,4.72 10.29,4.5 12,4.5Z"/></symbol>
+        <symbol id="icon-engine" viewBox="0 0 24 24"><path fill="currentColor" d="M7,4V6H10V8H7L5,10V13H3V10H1V18H3V15H5V18H8L10,20H14L16,18H19V15H21V18H23V10H21V13H19V10L17,8H14V6H17V4H7Z" /></symbol>
+        <symbol id="icon-hydraulic" viewBox="0 0 24 24"><path fill="currentColor" d="M12,7L10.5,5.5L9,7L10.5,8.5L12,7M15,10.5L13.5,9L12,10.5L13.5,12L15,10.5M19.5,13.5L18,12L16.5,13.5L18,15L19.5,13.5M3,3V21H21V3H3M19,19H5V5H19V19Z" /></symbol>
+    </defs></svg>
+
+    <script>
+        let machineIdStr = '';
+        let machineModel = '';
+        let tasksToday = [];
+        let currentTaskIndex = 0;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const user = JSON.parse(sessionStorage.getItem('user'));
+            if (!user) {
+                window.location.href = '/login';
+                return;
+            }
+            document.getElementById('operator-name-display').textContent = user.name;
+            loadDashboard();
+            setInterval(loadStatus, 5000);
+            document.getElementById('prev-task-btn').addEventListener('click', () => navigateTasks(-1));
+            document.getElementById('next-task-btn').addEventListener('click', () => navigateTasks(1));
+        });
+
+        async function loadDashboard() {
+            try {
+                const response = await fetch('/api/dashboard_data');
+                if (!response.ok) {
+                    if (response.status === 401) window.location.href = '/login';
+                    throw new Error('Failed to load dashboard data');
+                }
+                const data = await response.json();
+                
+                if (data.machine) {
+                    machineIdStr = data.machine.machine_id_str;
+                    machineModel = data.machine.model;
+                    document.getElementById('machine-id-display').textContent = `${machineModel} (${machineIdStr})`;
+                } else {
+                    document.getElementById('machine-id-display').textContent = 'No machine assigned';
+                }
+
+                tasksToday = data.tasks_today;
+                renderTaskCarousel();
+                loadStatus(); // Initial load of safety status
+            } catch (error) {
+                console.error("Error loading dashboard:", error);
+            }
+        }
+
+        async function loadStatus() {
+            if (!machineIdStr) return;
+            try {
+                const response = await fetch(`/api/status/${machineIdStr}`);
+                if (response.ok) {
+                    renderSafetyStatus(await response.json());
+                }
+            } catch (error) {
+                console.error("Error loading status:", error);
+            }
+        }
+        
+        function renderTaskCarousel() {
+            const carouselWrapper = document.getElementById('task-carousel-wrapper');
+            const counter = document.getElementById('task-counter');
+            
+            if (tasksToday.length === 0) {
+                carouselWrapper.innerHTML = `<div class="text-center my-auto w-full"><h2 class="text-2xl font-bold text-gray-800">All tasks for today are complete!</h2><p class="text-gray-500 mt-2">Go to the scheduler to add a new task.</p></div>`;
+                counter.textContent = '0 / 0';
+                return;
+            }
+            
+            counter.textContent = `${currentTaskIndex + 1} / ${tasksToday.length}`;
+            let taskCardsHtml = tasksToday.map(task => {
+                const statusColor = task.status === 'In Progress' ? 'blue' : (task.status === 'Completed' ? 'green' : 'gray');
+                return `
+                    <div class="task-card p-4 flex flex-col justify-between">
+                        <div>
+                            <p class="text-sm font-bold text-${statusColor}-600 uppercase">${task.status}</p>
+                            <h3 class="text-4xl font-extrabold text-gray-800 mt-1">${task.title}</h3>
+                        </div>
+                        <div class="my-8">
+                            <label for="progress-slider-${task.id}" class="flex justify-between text-lg font-bold mb-2">
+                                <span>Progress</span>
+                                <span id="progress-value-${task.id}">${task.current_cycles} / ${task.target_cycles} Cycles</span>
+                            </label>
+                            <input type="range" id="progress-slider-${task.id}" min="0" max="${task.target_cycles}" value="${task.current_cycles}" class="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                        </div>
+                        <div class="flex gap-4">
+                            <button onclick="updateTaskCycles('${task.id}')" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg text-lg shadow">Update Progress</button>
+                            <button onclick="updateTaskStatus('${task.id}', 'Completed')" class="w-full bg-green-600 text-white font-bold py-3 rounded-lg text-lg shadow">Mark as Finished</button>
+                        </div>
+                    </div>`;
+            }).join('');
+            carouselWrapper.innerHTML = `<div class="task-card-container">${taskCardsHtml}</div>`;
+            tasksToday.forEach(task => {
+                const slider = document.getElementById(`progress-slider-${task.id}`);
+                slider?.addEventListener('input', () => {
+                    document.getElementById(`progress-value-${task.id}`).textContent = `${slider.value} / ${task.target_cycles} Cycles`;
+                });
+            });
+            navigateTasks(0);
+        }
+
+        function navigateTasks(direction) {
+            if (tasksToday.length === 0) return;
+            currentTaskIndex = (currentTaskIndex + direction + tasksToday.length) % tasksToday.length;
+            document.querySelector('.task-card-container').style.transform = `translateX(-${currentTaskIndex * 100}%)`;
+            document.getElementById('task-counter').textContent = `${currentTaskIndex + 1} / ${tasksToday.length}`;
+        }
+
+        function renderSafetyStatus(status) {
+            const container = document.getElementById('safety-alerts-container');
+            const card = document.getElementById('safety-card');
+            card.classList.remove('alert-critical');
+            container.innerHTML = '';
+            
+            let hasAlert = false;
+            const createAlertHtml = (icon, type, msg) => {
+                hasAlert = true;
+                card.classList.add('alert-critical');
+                return `<div class="flex items-center p-3 rounded-lg bg-red-100 text-red-800"><svg class="w-8 h-8 mr-4 flex-shrink-0"><use href="#${icon}"></use></svg><div><p class="font-bold uppercase">${type} ALERT</p><p class="text-sm">${msg}</p></div></div>`;
+            };
+
+            if (status.seatbelt_status === 'Unfastened') container.innerHTML += createAlertHtml('icon-seatbelt', 'Seatbelt', 'Seatbelt is unfastened.');
+            if (status.tilt_angle > 15.0) container.innerHTML += createAlertHtml('icon-tilt', 'Tilt', `Critical tilt: ${status.tilt_angle.toFixed(1)}°`);
+            if (status.visibility_percent < 50) container.innerHTML += createAlertHtml('icon-visibility', 'Visibility', `Low visibility: ${status.visibility_percent}%`);
+            if (status.hydraulic_pressure < 2900) container.innerHTML += createAlertHtml('icon-hydraulic', 'Hydraulic', 'Pressure is critically low.');
+            if (status.engine_temp > 108) container.innerHTML += createAlertHtml('icon-engine', 'Engine', 'Temperature is critical.');
+
+            if (!hasAlert) {
+                container.innerHTML = `<div class="flex items-center p-3 rounded-lg bg-green-100 text-green-800"><i class="fas fa-check-circle text-xl mr-4"></i><p class="font-bold">All Systems Nominal</p></div>`;
+            }
+        }
+
+        async function openTrainingModal() {
+            if (!machineModel) {
+                alert("No machine assigned. Cannot fetch training materials.");
+                return;
+            }
+            const response = await fetch(`/api/training/${encodeURIComponent(machineModel)}`);
+            const materials = await response.json();
+            let materialsHtml = materials.map(m => {
+                const icon = m.module_type === 'Video' ? 'fa-youtube text-red-500' : 'fa-file-pdf text-red-500';
+                const url = m.module_type === 'Video' ? `https://www.youtube.com/watch?v=${m.url}` : m.url;
+                return `<a href="${url}" target="_blank" class="flex items-center p-4 rounded-lg hover:bg-gray-100"><i class="fab ${icon} fa-2x w-10 mr-4"></i><div><p class="font-semibold">${m.title}</p><p class="text-sm text-gray-500">${m.module_type}</p></div></a>`;
+            }).join('') || '<p class="text-gray-500">No training materials found for this machine model.</p>';
+            openModal('E-Learning Materials', materialsHtml);
+        }
+
+        function openReportIssueModal() {
+            const issueOptions = ['Hydraulic Lag/Failures', 'Unusual Vibrations', 'Material Not Available', 'Abnormal Engine Sound', 'GPS/Guidance System Error', 'Track/Tire Damage'];
+            let content = `<div class="space-y-4"><p class="text-sm text-gray-600">Select an issue category to report it to maintenance.</p><div><label class="block text-sm font-medium text-gray-700">Issue Category</label><select id="issue-category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">${issueOptions.map(o => `<option>${o}</option>`).join('')}</select></div><div><label class="block text-sm font-medium text-gray-700">Additional Details (Optional)</label><textarea id="issue-details" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"></textarea></div></div><div class="flex justify-end gap-3 mt-6"><button onclick="closeModal()" class="bg-gray-200 font-semibold py-2 px-4 rounded-lg">Cancel</button><button onclick="submitIssue()" class="bg-red-600 text-white font-semibold py-2 px-4 rounded-lg">Submit Report</button></div>`;
+            openModal('Report an Issue', content);
+        }
+
+        function openModal(title, content) {
+            const modalHtml = `<div class="modal-overlay" onclick="closeModal()"><div class="card p-8 w-full max-w-lg" onclick="event.stopPropagation()"><h3 class="text-2xl font-bold mb-6">${title}</h3>${content}</div></div>`;
+            document.getElementById('modal-container').innerHTML = modalHtml;
+        }
+
+        function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+
+        async function submitIssue() {
+            const payload = { 
+                category: document.getElementById('issue-category').value, 
+                details: document.getElementById('issue-details').value 
+            };
+            const response = await fetch('/api/issue/report', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(payload) 
+            });
+            alert((await response.json()).message);
+            closeModal();
+        }
+
+        async function updateTaskCycles(taskId) {
+            const newCycleCount = document.getElementById(`progress-slider-${taskId}`).value;
+            await fetch('/api/task/update_cycles', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ task_id: taskId, current_cycles: parseInt(newCycleCount) }) 
+            });
+            const task = tasksToday.find(t => t.id == taskId);
+            if (task) task.current_cycles = newCycleCount;
+        }
+
+        async function updateTaskStatus(taskId, status) {
+            await fetch('/api/task/update_status', { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ task_id: taskId, status: status }) 
+            });
+            if (status === 'Completed') {
+                tasksToday = tasksToday.filter(task => task.id != taskId);
+                currentTaskIndex = Math.max(0, tasksToday.length - 1);
+                renderTaskCarousel();
+            } else {
+                loadDashboard();
+            }
+        }
+    </script>
+</body>
+</html>
