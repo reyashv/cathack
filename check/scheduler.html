@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Scheduler - CAT</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0f2f5; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+        .calendar-day { border: 1px solid #e5e7eb; min-height: 120px; }
+        .calendar-day.other-month { background-color: #f9fafb; color: #9ca3af; }
+        .task-dot { height: 8px; width: 8px; border-radius: 50%; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+        .modal-content { background-color: white; padding: 2rem; border-radius: 0.75rem; width: 400px; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Left Column: Calendar -->
+        <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
+            <div class="flex justify-between items-center mb-4">
+                <button id="prev-month-btn" class="p-2 rounded-full hover:bg-gray-100"><i class="fas fa-chevron-left"></i></button>
+                <h2 id="month-year-header" class="text-xl font-bold text-gray-800"></h2>
+                <button id="next-month-btn" class="p-2 rounded-full hover:bg-gray-100"><i class="fas fa-chevron-right"></i></button>
+            </div>
+            <div class="calendar-grid text-center font-semibold text-gray-600 mb-2">
+                <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            </div>
+            <div id="calendar-body" class="calendar-grid"></div>
+        </div>
+
+        <!-- Right Column: Current Schedule -->
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Current Schedule</h2>
+            <div id="current-schedule-list" class="space-y-3"></div>
+        </div>
+    </div>
+
+    <!-- Add Task Modal -->
+    <div id="add-task-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 class="text-2xl font-bold mb-4">Add New Task</h3>
+            <input type="hidden" id="selected-day-input">
+            <div class="space-y-4">
+                <div>
+                    <label for="task-select" class="block text-sm font-medium text-gray-700">Select Task</label>
+                    <select id="task-select" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"></select>
+                </div>
+                <div>
+                    <label for="task-cycles" class="block text-sm font-medium text-gray-700">Target Cycles for this Job</label>
+                    <input type="number" id="task-cycles" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" value="100">
+                </div>
+                <button id="predict-btn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg">Predict Time</button>
+            </div>
+            <div id="prediction-result" class="mt-4 text-center hidden">
+                <p>Predicted Duration: <span id="pred-duration" class="font-bold">--</span> minutes</p>
+                <p class="text-xs text-gray-500">Based on ML model</p>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button onclick="closeModal()" class="bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg">Cancel</button>
+                <button id="save-task-btn" class="bg-green-600 text-white font-semibold py-2 px-4 rounded-lg">Add to Schedule</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const MACHINE_ID_STR = 'EXC001';
+        const OPERATOR_ID_STR = 'OP1001';
+        const BASE_URL = 'http://127.0.0.1:5000';
+
+        let current_date = new Date();
+        let tasks = [];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            renderCalendar();
+            loadPredefinedTasks();
+            document.getElementById('prev-month-btn').addEventListener('click', () => {
+                current_date.setMonth(current_date.getMonth() - 1);
+                renderCalendar();
+            });
+            document.getElementById('next-month-btn').addEventListener('click', () => {
+                current_date.setMonth(current_date.getMonth() + 1);
+                renderCalendar();
+            });
+            document.getElementById('predict-btn').addEventListener('click', getPrediction);
+            document.getElementById('save-task-btn').addEventListener('click', saveTask);
+        });
+
+        async function renderCalendar() {
+            const year = current_date.getFullYear();
+            const month = current_date.getMonth();
+            document.getElementById('month-year-header').innerText = `${current_date.toLocaleString('default', { month: 'long' })} ${year}`;
+            
+            await fetchTasksForMonth(year, month);
+            
+            const calendarBody = document.getElementById('calendar-body');
+            calendarBody.innerHTML = '';
+            
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+            for (let i = 0; i < firstDay; i++) {
+                calendarBody.innerHTML += `<div class="calendar-day other-month"></div>`;
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const tasksForDay = tasks.filter(t => t.day === dayStr);
+                let taskHtml = tasksForDay.map(t => `<div class="flex items-center text-xs mt-1"><span class="task-dot bg-blue-500 mr-2"></span>${t.title}</div>`).join('');
+
+                calendarBody.innerHTML += `
+                    <div class="calendar-day p-2 cursor-pointer hover:bg-gray-50" onclick="openModal('${dayStr}')">
+                        <span class="font-bold">${day}</span>
+                        ${taskHtml}
+                    </div>`;
+            }
+        }
+
+        async function fetchTasksForMonth(year, month) {
+            const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+            const response = await fetch(`${BASE_URL}/api/tasks_for_month?month=${monthStr}`);
+            tasks = await response.json();
+            updateCurrentScheduleList();
+        }
+
+        function updateCurrentScheduleList() {
+            const listEl = document.getElementById('current-schedule-list');
+            listEl.innerHTML = tasks.length ? tasks.map(t => `<div class="p-2 rounded-md ${t.status === 'In Progress' ? 'bg-blue-100' : 'bg-gray-100'}">${t.day}: ${t.title} (${t.status})</div>`).join('') : '<p>No tasks scheduled.</p>';
+        }
+
+        async function loadPredefinedTasks() {
+            const select = document.getElementById('task-select');
+            const response = await fetch(`${BASE_URL}/api/predefined_tasks`);
+            const predefinedTasks = await response.json();
+            select.innerHTML = predefinedTasks.map(task => `<option value="${task.id}">${task.name}</option>`).join('');
+        }
+
+        function openModal(dayStr) {
+            document.getElementById('selected-day-input').value = dayStr;
+            document.getElementById('add-task-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('add-task-modal').classList.add('hidden');
+            document.getElementById('prediction-result').classList.add('hidden');
+        }
+
+        async function getPrediction() {
+            const taskId = document.getElementById('task-select').value;
+            const cycles = document.getElementById('task-cycles').value;
+            const response = await fetch(`${BASE_URL}/api/predict/time`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ predefined_task_id: taskId, target_cycles: cycles })
+            });
+            const data = await response.json();
+            if (data.predicted_duration_minutes) {
+                document.getElementById('pred-duration').textContent = data.predicted_duration_minutes;
+                document.getElementById('prediction-result').classList.remove('hidden');
+            }
+        }
+
+        async function saveTask() {
+            const predefined_task_id = document.getElementById('task-select').value;
+            const day = document.getElementById('selected-day-input').value;
+            await fetch(`${BASE_URL}/api/tasks/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ predefined_task_id, day, operator_id_str: OPERATOR_ID_STR, machine_id_str: MACHINE_ID_STR })
+            });
+            closeModal();
+            renderCalendar();
+        }
+    </script>
+</body>
+</html>
+
