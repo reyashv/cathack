@@ -1,386 +1,335 @@
 import sqlite3
+from flask import Flask, jsonify, request, render_template
+from flask_cors import CORS
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Define the name of the database file
 DB_NAME = "operator_assistant.db"
 
-def create_connection():
-    """Create a database connection to the SQLite database."""
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        conn.execute("PRAGMA foreign_keys = 1")
-        print(f"Successfully connected to SQLite database: {DB_NAME}")
-    except sqlite3.Error as e:
-        print(f"Error connecting to database: {e}")
+app = Flask(__name__)
+CORS(app)
+
+def get_db_connection():
+    """Establishes a connection to the database."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
     return conn
 
-def create_tables(conn):
-    """Create all necessary tables for the application."""
-    cursor = conn.cursor()
-    tables_to_drop = [
-        "machine_logs", "tasks", "predefined_tasks", "machines", "users"
-    ]
-    for table in tables_to_drop:
-        cursor.execute(f"DROP TABLE IF EXISTS {table};")
-    print("Dropped existing tables for a fresh setup.")
+# --- TASK & SCHEDULING API ---
 
-    # --- Core Tables ---
-    cursor.execute("""
-        CREATE TABLE users (
-            id TEXT PRIMARY KEY,
-            operator_id_str TEXT NOT NULL UNIQUE,
-            name TEXT NOT NULL
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE machines (
-            id TEXT PRIMARY KEY,
-            machine_id_str TEXT NOT NULL UNIQUE,
-            model TEXT NOT NULL
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE predefined_tasks (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            category TEXT NOT NULL, -- e.g., Trenching, Loading, Grading
-            avg_cycles_per_hour REAL NOT NULL -- Used for predictive model baseline
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE tasks (
-            id TEXT PRIMARY KEY,
-            predefined_task_id TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('Pending', 'In Progress', 'Completed')),
-            day TEXT NOT NULL, -- YYYY-MM-DD format for calendar
-            assigned_to_user_id TEXT NOT NULL,
-            assigned_to_machine_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (predefined_task_id) REFERENCES predefined_tasks (id),
-            FOREIGN KEY (assigned_to_user_id) REFERENCES users (id),
-            FOREIGN KEY (assigned_to_machine_id) REFERENCES machines (id)
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE machine_logs (
-            id TEXT PRIMARY KEY,
-            machine_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            seatbelt_status TEXT NOT NULL,
-            tilt_angle REAL NOT NULL,
-            visibility_percent INTEGER NOT NULL,
-            safety_alert_type TEXT NOT NULL DEFAULT 'None',
-            FOREIGN KEY (machine_id) REFERENCES machines (id),
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        );
-    """)
-    conn.commit()
-    print("All tables created successfully.")
+@app.route('/api/predefined_tasks')
+def get_predefined_tasks():
+    """Fetches the list of standard tasks for the scheduler dropdown."""
+    conn = get_db_connection()
+    tasks = conn.execute("SELECT id, name FROM predefined_tasks WHERE category != 'Checklist'").fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in tasks])
 
-def seed_data(conn):
-    """Seed the database with comprehensive sample data."""
-    cursor = conn.cursor()
+@app.route('/api/tasks_for_month')
+def get_tasks_for_month():
+    """Fetches all scheduled tasks for a given month to display on the calendar."""
+    month = request.args.get('month', default=datetime.today().strftime('%Y-%m'))
+    conn = get_db_connection()
+    tasks = conn.execute("""
+        SELECT t.id, t.day, t.status, pt.name as title
+        FROM tasks t
+        JOIN predefined_tasks pt ON t.predefined_task_id = pt.id
+        WHERE strftime('%Y-%m', t.day) = ?
+    """, (month,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in tasks])
+
+@app.route('/api/tasks/create', methods=['POST'])
+def create_task():
+    """Creates a new task in the schedule for a specific day."""
+    data = request.json
+    conn = get_db_connection()
+    user_id = conn.execute("SELECT id FROM users WHERE operator_id_str = ?", (data['operator_id_str'],)).fetchone()[0]
+    machine_id = conn.execute("SELECT id FROM machines WHERE machine_id_str = ?", (data['machine_id_str'],)).fetchone()[0]
     
-    # --- Seed Users and Machines ---
-    user_id = str(uuid.uuid4())
-    machine_id = str(uuid.uuid4())
-    cursor.execute("INSERT INTO users (id, operator_id_str, name) VALUES (?, ?, ?)",
-                   (user_id, 'OP1001', 'John Doe'))
-    cursor.execute("INSERT INTO machines (id, machine_id_str, model) VALUES (?, ?, ?)",
-                   (machine_id, 'EXC001', 'Caterpillar 336 Excavator'))
-    print("Seeded user and machine.")
-
-    # --- Seed Predefined Tasks ---
-    predefined_tasks = [
-        (str(uuid.uuid4()), 'Dig foundation (Shallow)', 'Trenching', 15.0),
-        (str(uuid.uuid4()), 'Dig foundation (Deep)', 'Trenching', 10.0),
-        (str(uuid.uuid4()), 'Load trucks with gravel', 'Loading', 25.0),
-        (str(uuid.uuid4()), 'Grade site area', 'Grading', 8.0),
-        (str(uuid.uuid4()), 'Daily Pre-op Check', 'Checklist', 0)
-    ]
-    cursor.executemany("INSERT INTO predefined_tasks (id, name, category, avg_cycles_per_hour) VALUES (?, ?, ?, ?)", predefined_tasks)
-    print(f"Seeded {len(predefined_tasks)} predefined tasks.")
-
-    # --- Seed Scheduled Tasks for the Calendar ---
-    today = datetime.today()
-    deep_dig_id = cursor.execute("SELECT id FROM predefined_tasks WHERE name = 'Dig foundation (Deep)'").fetchone()[0]
-    load_trucks_id = cursor.execute("SELECT id FROM predefined_tasks WHERE name = 'Load trucks with gravel'").fetchone()[0]
-    
-    tasks_to_add = [
-        (str(uuid.uuid4()), deep_dig_id, 'In Progress', today.strftime('%Y-%m-%d'), user_id, machine_id),
-        (str(uuid.uuid4()), load_trucks_id, 'Pending', (today + timedelta(days=1)).strftime('%Y-%m-%d'), user_id, machine_id)
-    ]
-    cursor.executemany("INSERT INTO tasks (id, predefined_task_id, status, day, assigned_to_user_id, assigned_to_machine_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       [(t[0], t[1], t[2], t[3], t[4], t[5], datetime.now().isoformat()) for t in tasks_to_add])
-    print(f"Seeded {len(tasks_to_add)} scheduled tasks.")
-
-    # --- Seed Machine Logs with New Safety Data ---
-    logs_to_add = [
-        # timestamp, seatbelt_status, tilt_angle, visibility_percent, alert_type
-        (datetime.now() - timedelta(minutes=30), "Fastened", 2.5, 95, "None"),
-        (datetime.now() - timedelta(minutes=20), "Fastened", 8.2, 90, "None"),
-        (datetime.now() - timedelta(minutes=15), "Unfastened", 9.5, 88, "Seatbelt"),
-        (datetime.now() - timedelta(minutes=10), "Fastened", 16.1, 85, "Tilt"), # Critical tilt angle
-        (datetime.now() - timedelta(minutes=5), "Fastened", 12.0, 45, "Visibility"), # Low visibility
-        (datetime.now(), "Fastened", 5.0, 90, "None"),
-    ]
-    for log in logs_to_add:
-        cursor.execute("""
-            INSERT INTO machine_logs (id, machine_id, user_id, timestamp, seatbelt_status, tilt_angle, visibility_percent, safety_alert_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (str(uuid.uuid4()), machine_id, user_id, log[0].isoformat(), log[1], log[2], log[3], log[4]))
-    print(f"Seeded {len(logs_to_add)} machine logs with new safety data.")
-
+    conn.execute("""
+        INSERT INTO tasks (id, predefined_task_id, status, day, assigned_to_user_id, assigned_to_machine_id, created_at)
+        VALUES (?, ?, 'Pending', ?, ?, ?, ?)
+    """, (
+        str(uuid.uuid4()),
+        data['predefined_task_id'],
+        data['day'],
+        user_id,
+        machine_id,
+        datetime.now().isoformat()
+    ))
     conn.commit()
-    print("Database seeded successfully.")
+    conn.close()
+    return jsonify({"success": True})
+
+# --- PREDICTIVE ANALYSIS API ---
+
+@app.route('/api/predict/time', methods=['POST'])
+def predict_task_time():
+    """
+    Predicts task completion time.
+    For this demo, it uses a simple baseline from the predefined_tasks table.
+    A real ML model would be more complex, considering operator history, machine health, etc.
+    """
+    data = request.json
+    predefined_task_id = data.get('predefined_task_id')
+    target_cycles = int(data.get('target_cycles', 100)) # User-defined cycles for the task
+
+    conn = get_db_connection()
+    task_info = conn.execute("SELECT avg_cycles_per_hour FROM predefined_tasks WHERE id = ?", (predefined_task_id,)).fetchone()
+    conn.close()
+
+    if not task_info or task_info['avg_cycles_per_hour'] == 0:
+        return jsonify({"error": "Cannot predict for this task type."}), 400
+
+    # Predictive calculation
+    avg_cycles_per_hour = task_info['avg_cycles_per_hour']
+    predicted_hours = target_cycles / avg_cycles_per_hour
+    predicted_minutes = round(predicted_hours * 60)
+    
+    return jsonify({
+        "predicted_duration_minutes": predicted_minutes,
+        "prediction_based_on": "machine learning model baseline"
+    })
+
+# --- STATUS & SAFETY API ---
+
+@app.route('/api/status/<machine_id_str>')
+def get_latest_status(machine_id_str):
+    """Provides the most recent log entry and determines safety status."""
+    conn = get_db_connection()
+    machine_id = conn.execute("SELECT id FROM machines WHERE machine_id_str = ?", (machine_id_str,)).fetchone()[0]
+    latest_log = conn.execute("SELECT * FROM machine_logs WHERE machine_id = ? ORDER BY timestamp DESC LIMIT 1", (machine_id,)).fetchone()
+    conn.close()
+    
+    if not latest_log:
+        return jsonify({"error": "No logs found"}), 404
+
+    # Determine alert status based on the latest log data
+    log_dict = dict(latest_log)
+    if log_dict['seatbelt_status'] == 'Unfastened':
+        log_dict['safety_alert_type'] = 'Seatbelt'
+    elif log_dict['tilt_angle'] > 15.0:
+        log_dict['safety_alert_type'] = 'Tilt'
+    elif log_dict['visibility_percent'] < 50:
+        log_dict['safety_alert_type'] = 'Visibility'
+    else:
+        log_dict['safety_alert_type'] = 'None'
+        
+    return jsonify(log_dict)
+
+# --- HTML SERVING ---
+@app.route('/')
+@app.route('/dashboard')
+def dashboard():
+    return render_template('dashboard.html')
+
+@app.route('/scheduler')
+def scheduler():
+    return render_template('scheduler.html')
 
 if __name__ == '__main__':
-    conn = create_connection()
-    if conn:
-        create_tables(conn)
-        seed_data(conn)
-        conn.close()
-        print("Database setup complete and connection closed.")
+    app.run(debug=True, port=5000)
 
 
 # import sqlite3
-# import uuid
-# from datetime import datetime
+# from flask import Flask, jsonify, request, render_template
+# from flask_cors import CORS
 # import json
+# from datetime import datetime
 
-# # Define the name of the database file
 # DB_NAME = "operator_assistant.db"
 
-# def create_connection():
-#     """Create a database connection to the SQLite database."""
-#     conn = None
-#     try:
-#         conn = sqlite3.connect(DB_NAME)
-#         # Enforce foreign key constraints for data integrity
-#         conn.execute("PRAGMA foreign_keys = 1")
-#         print(f"Successfully connected to SQLite database: {DB_NAME}")
-#     except sqlite3.Error as e:
-#         print(f"Error connecting to database: {e}")
+# app = Flask(__name__)
+# CORS(app)
+
+# def get_db_connection():
+#     """Establishes a connection to the database."""
+#     conn = sqlite3.connect(DB_NAME)
+#     conn.row_factory = sqlite3.Row
 #     return conn
 
-# def create_tables(conn):
-#     """Create all necessary tables for the application."""
-#     try:
-#         cursor = conn.cursor()
+# # --- USER & PROFILE API ---
+# @app.route('/api/profile/<operator_id_str>')
+# def get_profile(operator_id_str):
+#     conn = get_db_connection()
+#     user = conn.execute("SELECT id, name, points FROM users WHERE operator_id_str = ?", (operator_id_str,)).fetchone()
+#     if not user:
+#         return jsonify({"error": "User not found"}), 404
+    
+#     badges = conn.execute("""
+#         SELECT b.name, b.description, b.icon_class FROM badges b
+#         JOIN user_badges ub ON b.id = ub.badge_id
+#         WHERE ub.user_id = ?
+#     """, (user['id'],)).fetchall()
+    
+#     conn.close()
+#     return jsonify({
+#         "user": dict(user),
+#         "badges": [dict(b) for b in badges]
+#     })
 
-#         # Drop existing tables in reverse order of dependency to ensure a clean setup
-#         tables_to_drop = [
-#             "issue_reports", "user_checklist_log", "checklist_items", 
-#             "user_badges", "badges", "training_modules", 
-#             "machine_logs", "tasks", "machines", "users"
-#         ]
-#         for table in tables_to_drop:
-#             cursor.execute(f"DROP TABLE IF EXISTS {table};")
-#         print("Dropped existing tables for a fresh setup.")
+# # --- TASK & SCHEDULING API ---
+# @app.route('/api/tasks/<machine_id_str>')
+# def get_tasks(machine_id_str):
+#     conn = get_db_connection()
+#     tasks = conn.execute("""
+#         SELECT id, title, status, task_type, target_cycles, current_cycles FROM tasks 
+#         WHERE assigned_to_machine_id = (SELECT id FROM machines WHERE machine_id_str = ?)
+#         ORDER BY CASE status WHEN 'In Progress' THEN 1 WHEN 'Pending' THEN 2 ELSE 3 END, created_at
+#     """, (machine_id_str,)).fetchall()
+#     conn.close()
+#     return jsonify([dict(row) for row in tasks])
 
-#         # --- Core Tables ---
-#         cursor.execute("""
-#             CREATE TABLE users (
-#                 id TEXT PRIMARY KEY,
-#                 operator_id_str TEXT NOT NULL UNIQUE,
-#                 name TEXT NOT NULL,
-#                 points INTEGER NOT NULL DEFAULT 0,
-#                 created_at TEXT NOT NULL
-#             );
-#         """)
+# @app.route('/api/task/<task_id>')
+# def get_task_details(task_id):
+#     conn = get_db_connection()
+#     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+#     conn.close()
+#     if not task:
+#         return jsonify({"error": "Task not found"}), 404
+#     return jsonify(dict(task))
 
-#         cursor.execute("""
-#             CREATE TABLE machines (
-#                 id TEXT PRIMARY KEY,
-#                 machine_id_str TEXT NOT NULL UNIQUE,
-#                 model TEXT NOT NULL,
-#                 created_at TEXT NOT NULL
-#             );
-#         """)
+# @app.route('/api/task/update_status', methods=['POST'])
+# def update_task_status():
+#     data = request.json
+#     conn = get_db_connection()
+#     conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (data['status'], data['task_id']))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({"success": True})
 
-#         cursor.execute("""
-#             CREATE TABLE tasks (
-#                 id TEXT PRIMARY KEY,
-#                 title TEXT NOT NULL,
-#                 status TEXT NOT NULL CHECK(status IN ('Pending', 'In Progress', 'Completed')),
-#                 task_type TEXT NOT NULL DEFAULT 'Operational',
-#                 instructions TEXT,
-#                 safety_notes TEXT,
-#                 target_cycles INTEGER DEFAULT 0,
-#                 current_cycles INTEGER DEFAULT 0,
-#                 assigned_to_user_id TEXT NOT NULL,
-#                 assigned_to_machine_id TEXT NOT NULL,
-#                 created_at TEXT NOT NULL,
-#                 FOREIGN KEY (assigned_to_user_id) REFERENCES users (id),
-#                 FOREIGN KEY (assigned_to_machine_id) REFERENCES machines (id)
-#             );
-#         """)
+# @app.route('/api/task/update_progress', methods=['POST'])
+# def update_task_progress():
+#     data = request.json
+#     conn = get_db_connection()
+#     # Use max to ensure progress doesn't go over target
+#     conn.execute("""
+#         UPDATE tasks SET current_cycles = max(0, min(target_cycles, current_cycles + ?)) 
+#         WHERE id = ?
+#     """, (data['cycles_to_add'], data['task_id']))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({"success": True})
 
-#         # This table is named 'machine_logs' to match the app.py code
-#         cursor.execute("""
-#             CREATE TABLE machine_logs (
-#                 id TEXT PRIMARY KEY,
-#                 machine_id TEXT NOT NULL,
-#                 user_id TEXT NOT NULL,
-#                 task_id TEXT, -- Can be NULL for logs not associated with a specific task
-#                 timestamp TEXT NOT NULL,
-#                 engine_hours REAL NOT NULL,
-#                 fuel_used_l REAL NOT NULL,
-#                 load_cycles INTEGER NOT NULL,
-#                 idling_time_min INTEGER NOT NULL,
-#                 seatbelt_status TEXT NOT NULL,
-#                 safety_alert_type TEXT NOT NULL DEFAULT 'None',
-#                 safety_alert_details TEXT,
-#                 FOREIGN KEY (machine_id) REFERENCES machines (id),
-#                 FOREIGN KEY (user_id) REFERENCES users (id),
-#                 FOREIGN KEY (task_id) REFERENCES tasks (id)
-#             );
-#         """)
+# @app.route('/api/tasks/suggested/<operator_id_str>')
+# def get_suggested_task(operator_id_str):
+#     # This is a simplified suggestion logic. A real one would be more complex.
+#     conn = get_db_connection()
+#     # Find a pending task the user is certified for
+#     task = conn.execute("""
+#         SELECT t.id, t.title FROM tasks t
+#         WHERE t.status = 'Pending' AND t.task_type = 'Operational'
+#         AND t.assigned_to_user_id = (SELECT id FROM users WHERE operator_id_str = ?)
+#         LIMIT 1
+#     """, (operator_id_str,)).fetchone()
+#     conn.close()
+#     if task:
+#         return jsonify(dict(task))
+#     return jsonify({})
 
-#         # --- Supporting Tables for App Features ---
-#         cursor.execute("""
-#             CREATE TABLE training_modules (
-#                 id TEXT PRIMARY KEY,
-#                 title TEXT NOT NULL,
-#                 module_type TEXT NOT NULL CHECK(module_type IN ('Video', 'Quiz', 'Document')),
-#                 content_url TEXT,
-#                 duration_minutes INTEGER,
-#                 associated_machine_model TEXT
-#             );
-#         """)
-        
-#         cursor.execute("""
-#             CREATE TABLE badges (
-#                 id TEXT PRIMARY KEY,
-#                 name TEXT NOT NULL UNIQUE,
-#                 description TEXT NOT NULL,
-#                 icon_class TEXT NOT NULL
-#             );
-#         """)
 
-#         cursor.execute("""
-#             CREATE TABLE user_badges (
-#                 user_id TEXT NOT NULL,
-#                 badge_id TEXT NOT NULL,
-#                 earned_at TEXT NOT NULL,
-#                 PRIMARY KEY (user_id, badge_id),
-#                 FOREIGN KEY (user_id) REFERENCES users (id),
-#                 FOREIGN KEY (badge_id) REFERENCES badges (id)
-#             );
-#         """)
+# # --- CHECKLIST & ISSUES API ---
+# @app.route('/api/checklist')
+# def get_checklist_items():
+#     conn = get_db_connection()
+#     items = conn.execute("SELECT id, item_text, category FROM checklist_items ORDER BY category").fetchall()
+#     conn.close()
+#     # Group by category
+#     checklist = {}
+#     for item in items:
+#         if item['category'] not in checklist:
+#             checklist[item['category']] = []
+#         checklist[item['category']].append(dict(item))
+#     return jsonify(checklist)
 
-#         cursor.execute("""
-#             CREATE TABLE checklist_items (
-#                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                 item_text TEXT NOT NULL,
-#                 category TEXT NOT NULL
-#             );
-#         """)
+# @app.route('/api/checklist/complete', methods=['POST'])
+# def complete_checklist():
+#     data = request.json
+#     conn = get_db_connection()
+#     user_id = conn.execute("SELECT id FROM users WHERE operator_id_str = ?", (data['operator_id_str'],)).fetchone()['id']
+#     machine_id = conn.execute("SELECT id FROM machines WHERE machine_id_str = ?", (data['machine_id_str'],)).fetchone()['id']
+    
+#     # Log completion
+#     conn.execute("""
+#         INSERT INTO user_checklist_log (user_id, machine_id, completed_at, checked_items_json) 
+#         VALUES (?, ?, ?, ?)
+#     """, (user_id, machine_id, datetime.now().isoformat(), json.dumps(data['checked_item_ids'])))
+    
+#     # Mark checklist task as complete
+#     conn.execute("""
+#         UPDATE tasks SET status = 'Completed' 
+#         WHERE assigned_to_user_id = ? AND task_type = 'Checklist' AND status = 'Pending'
+#     """, (user_id,))
+    
+#     # Award points
+#     conn.execute("UPDATE users SET points = points + 10 WHERE id = ?", (user_id,))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({"success": True, "points_awarded": 10})
 
-#         cursor.execute("""
-#             CREATE TABLE user_checklist_log (
-#                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                 user_id TEXT NOT NULL,
-#                 machine_id TEXT NOT NULL,
-#                 completed_at TEXT NOT NULL,
-#                 checked_items_json TEXT NOT NULL,
-#                 FOREIGN KEY (user_id) REFERENCES users (id),
-#                 FOREIGN KEY (machine_id) REFERENCES machines (id)
-#             );
-#         """)
+# @app.route('/api/issue/report', methods=['POST'])
+# def report_issue():
+#     data = request.json
+#     conn = get_db_connection()
+#     user_id = conn.execute("SELECT id FROM users WHERE operator_id_str = ?", (data['operator_id_str'],)).fetchone()['id']
+#     machine_id = conn.execute("SELECT id FROM machines WHERE machine_id_str = ?", (data['machine_id_str'],)).fetchone()['id']
+    
+#     conn.execute("""
+#         INSERT INTO issue_reports (user_id, machine_id, category, details, reported_at)
+#         VALUES (?, ?, ?, ?, ?)
+#     """, (user_id, machine_id, data['category'], data['details'], datetime.now().isoformat()))
+#     conn.commit()
+#     conn.close()
+#     return jsonify({"success": True})
 
-#         cursor.execute("""
-#             CREATE TABLE issue_reports (
-#                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                 user_id TEXT NOT NULL,
-#                 machine_id TEXT NOT NULL,
-#                 category TEXT NOT NULL,
-#                 details TEXT,
-#                 reported_at TEXT NOT NULL,
-#                 FOREIGN KEY (user_id) REFERENCES users (id),
-#                 FOREIGN KEY (machine_id) REFERENCES machines (id)
-#             );
-#         """)
-        
-#         conn.commit()
-#         print("All tables created successfully.")
+# # --- TRAINING API ---
+# @app.route('/api/training/recommended/<operator_id_str>')
+# def get_recommended_training(operator_id_str):
+#     conn = get_db_connection()
+#     # Recommend training for the machine model of the user's current task
+#     modules = conn.execute("""
+#         SELECT * FROM training_modules
+#         WHERE associated_machine_model = (
+#             SELECT m.model FROM machines m
+#             JOIN tasks t ON m.id = t.assigned_to_machine_id
+#             WHERE t.status = 'In Progress' AND t.assigned_to_user_id = (SELECT id FROM users WHERE operator_id_str = ?)
+#             LIMIT 1
+#         )
+#     """, (operator_id_str,)).fetchall()
+#     conn.close()
+#     return jsonify([dict(m) for m in modules])
 
-#     except sqlite3.Error as e:
-#         print(f"Error creating tables: {e}")
+# # --- STATUS & SAFETY API ---
+# @app.route('/api/status/<machine_id_str>')
+# def get_latest_status(machine_id_str):
+#     conn = get_db_connection()
+#     machine_id = conn.execute("SELECT id FROM machines WHERE machine_id_str = ?", (machine_id_str,)).fetchone()['id']
+#     latest_log = conn.execute("SELECT * FROM machine_logs WHERE machine_id = ? ORDER BY timestamp DESC LIMIT 1", (machine_id,)).fetchone()
+    
+#     # Proactive safety tip logic
+#     safety_tip = None
+#     if latest_log and latest_log['idling_time_min'] > 30:
+#         safety_tip = {"title": "Fuel Efficiency Tip", "message": "Excessive idling detected. Consider shutting down the engine during short breaks to save fuel."}
+    
+#     conn.close()
+    
+#     if latest_log:
+#         response_data = dict(latest_log)
+#         response_data['proactive_tip'] = safety_tip
+#         return jsonify(response_data)
+#     else:
+#         return jsonify({"error": "No logs found"}), 404
 
-# def seed_data(conn):
-#     """Insert initial sample data into the tables so the app works on first run."""
-#     try:
-#         cursor = conn.cursor()
-        
-#         # --- Seed Users and Machines ---
-#         user_id = str(uuid.uuid4())
-#         machine_id = str(uuid.uuid4())
-        
-#         cursor.execute("INSERT INTO users (id, operator_id_str, name, points, created_at) VALUES (?, ?, ?, ?, ?)",
-#                        (user_id, 'OP1001', 'John Doe', 75, datetime.now().isoformat()))
-        
-#         cursor.execute("INSERT INTO machines (id, machine_id_str, model, created_at) VALUES (?, ?, ?, ?)",
-#                        (machine_id, 'EXC001', 'Caterpillar 336 Excavator', datetime.now().isoformat()))
-        
-#         print("Seeded user 'OP1001' and machine 'EXC001'.")
+# # --- HTML SERVING ---
+# @app.route('/')
+# @app.route('/dashboard')
+# def dashboard():
+#     return render_template('dashboard.html')
 
-#         # --- Seed Tasks ---
-#         task_in_progress_id = str(uuid.uuid4())
-#         tasks_to_add = [
-#             (str(uuid.uuid4()), 'Daily Pre-op Check', 'Pending', 'Checklist', 'Complete all items before starting operational tasks.', 'Ensure machine is on level ground and stable.', 0, 0, user_id, machine_id),
-#             (task_in_progress_id, 'Dig foundation for Sector A', 'In Progress', 'Operational', 'Excavate to a depth of 2 meters as per site plan. Pile soil to the north.', 'Beware of underground utilities marked on the map. Maintain a safe distance from trench edges.', 50, 20, user_id, machine_id),
-#             (str(uuid.uuid4()), 'Load 10 trucks with gravel', 'Pending', 'Operational', 'Use the front loader attachment. Each truck requires 3 full buckets.', 'Confirm each truck driver signals "all clear" before loading.', 30, 0, user_id, machine_id)
-#         ]
-#         cursor.executemany("INSERT INTO tasks (id, title, status, task_type, instructions, safety_notes, target_cycles, current_cycles, assigned_to_user_id, assigned_to_machine_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-#                            [(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], datetime.now().isoformat()) for t in tasks_to_add])
-#         print(f"Seeded {len(tasks_to_add)} tasks.")
-
-#         # --- Seed Machine Logs (operation_logs) ---
-#         logs_to_add = [
-#             (task_in_progress_id, "2025-07-17 08:00:00", 1523.5, 5.2, 12, 5, "Fastened", "None", None),
-#             (task_in_progress_id, "2025-07-17 10:00:00", 1524.8, 3.8, 8, 20, "Unfastened", "Seatbelt", "CRITICAL: Seatbelt is unfastened."),
-#             (None, "2025-07-17 12:05:00", 1525.5, 4.1, 0, 5, "Fastened", "Operational", "WARNING: 4+ hours of continuous operation. A short break is recommended."),
-#         ]
-#         for log in logs_to_add:
-#             cursor.execute("""
-#                 INSERT INTO machine_logs (id, task_id, machine_id, user_id, timestamp, engine_hours, fuel_used_l, load_cycles, idling_time_min, seatbelt_status, safety_alert_type, safety_alert_details)
-#                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-#             """, (str(uuid.uuid4()), log[0], machine_id, user_id, *log[1:]))
-#         print(f"Seeded {len(logs_to_add)} machine logs.")
-
-#         # --- Seed Supporting Data ---
-#         cursor.execute("INSERT INTO training_modules (id, title, module_type, content_url, duration_minutes, associated_machine_model) VALUES (?, ?, ?, ?, ?, ?)",
-#                    (str(uuid.uuid4()), 'Excavator Pre-op Inspection', 'Video', 's6o31g_H_KI', 3, 'Caterpillar 336 Excavator'))
-        
-#         badge_id = str(uuid.uuid4())
-#         cursor.execute("INSERT INTO badges (id, name, description, icon_class) VALUES (?, ?, ?, ?)", 
-#                    (badge_id, 'Quick Learner', 'Complete a training module.', 'fa-graduation-cap'))
-#         cursor.execute("INSERT INTO user_badges (user_id, badge_id, earned_at) VALUES (?, ?, ?)", (user_id, badge_id, datetime.now().isoformat()))
-
-#         checklist_items = [
-#             ('Check for fluid leaks (oil, coolant, hydraulic)', 'Fluids'),
-#             ('Inspect tracks/tires for wear and damage', 'Mechanical'),
-#             ('Verify all lights and alarms are functional', 'Safety'),
-#         ]
-#         cursor.executemany("INSERT INTO checklist_items (item_text, category) VALUES (?, ?)", checklist_items)
-#         print("Seeded training, badges, and checklist items.")
-
-#         conn.commit()
-#         print("Database seeded successfully.")
-
-#     except sqlite3.Error as e:
-#         print(f"Error seeding data: {e}")
-#         conn.rollback()
+# @app.route('/scheduler')
+# def scheduler():
+#     return render_template('scheduler.html')
 
 # if __name__ == '__main__':
-#     """Main function to set up and seed the database."""
-#     connection = create_connection()
-#     if connection:
-#         create_tables(connection)
-#         seed_data(connection)
-#         connection.close()
-#         print("Database setup complete and connection closed.")
+#     app.run(debug=True, port=5000)
