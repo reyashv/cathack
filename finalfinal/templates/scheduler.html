@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Scheduler</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #080808; 
+            color: #EAEAEA;
+        }
+        .card {
+            background-color: #181818;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border-top: 4px solid #FFC500;
+        }
+        .calendar-grid { 
+            display: grid; 
+            grid-template-columns: repeat(7, 1fr); 
+        }
+        .calendar-day { 
+            border-top: 1px solid #374151; /* gray-700 */
+            border-left: 1px solid #374151; /* gray-700 */
+            min-height: 140px; 
+        }
+        .calendar-day:nth-child(7n) { 
+            border-right: 1px solid #374151; /* gray-700 */
+        }
+        .calendar-day:last-child {
+            border-bottom: 1px solid #374151;
+        }
+        .calendar-day.other-month { 
+            background-color: #111827; /* gray-900 */
+            color: #4B5563; /* gray-600 */
+        }
+        .modal-overlay { 
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+            background-color: rgba(0,0,0,0.8); 
+            display: flex; align-items: center; justify-content: center; z-index: 50; 
+            transition: opacity 0.3s ease; 
+        }
+        .task-item { 
+            transition: background-color 0.2s ease; 
+        }
+        /* Custom Button Styles */
+        .btn-cat-yellow {
+            background-color: #FFC500; color: #000000; font-weight: bold;
+        }
+        .btn-cat-yellow:hover { background-color: #e6b300; }
+        .btn-cat-green {
+            background-color: #22c55e; color: white; font-weight: 600;
+        }
+        .btn-cat-green:hover { background-color: #16a34a; }
+        .btn-cat-green:disabled { background-color: #166534; color: #a3a3a3; cursor: not-allowed; }
+
+        /* Dark Form Styles */
+        .form-input-dark {
+             background-color: #374151; /* gray-700 */
+             border: 1px solid #4b5563; /* gray-600 */
+             color: white;
+        }
+        .form-input-dark:focus {
+            border-color: #FFC500;
+            --tw-ring-color: #FFC500;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <img class="absolute top-8 left-8 h-10 w-auto" src="static\assets\image.png" alt="Caterpillar Logo">
+
+    <div class="max-w-7xl mx-auto pt-16">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2 card p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <a href="/dashboard" class="btn-cat-yellow py-2 px-4 rounded-lg text-sm"><i class="fas fa-arrow-left mr-2"></i>Dashboard</a>
+                    <div class="flex items-center gap-4">
+                        <button id="prev-month-btn" class="p-2 rounded-full hover:bg-gray-700" aria-label="Previous month"><i class="fas fa-chevron-left"></i></button>
+                        <h2 id="month-year-header" class="text-2xl font-bold text-white w-48 text-center"></h2>
+                        <button id="next-month-btn" class="p-2 rounded-full hover:bg-gray-700" aria-label="Next month"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                    <div class="w-32"></div> </div>
+                <div class="calendar-grid text-center font-semibold text-gray-400 mb-2 border-b border-gray-700 pb-2">
+                    <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                </div>
+                <div id="calendar-body" class="calendar-grid"></div>
+            </div>
+
+            <div class="card p-6">
+                <h2 class="text-xl font-bold text-white mb-4">Schedule for <span id="schedule-list-month">Month</span></h2>
+                <div id="current-schedule-list" class="space-y-3 h-[40rem] overflow-y-auto pr-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-task-modal" class="modal-overlay hidden">
+        <div class="card p-8 w-full max-w-lg" onclick="event.stopPropagation()">
+            <h3 class="text-2xl font-bold mb-1 text-white">Add New Task</h3>
+            <p class="text-gray-400 mb-6">For <span id="modal-date-display" class="font-semibold text-gray-300"></span></p>
+            <input type="hidden" id="selected-day-input">
+            <div class="space-y-4">
+                <div>
+                    <label for="task-select" class="block text-sm font-medium text-gray-300">Select Task from Library</label>
+                    <select id="task-select" class="form-input-dark mt-1 block w-full rounded-md shadow-sm"></select>
+                </div>
+                <div>
+                    <label id="task-volume-label" for="task-volume" class="block text-sm font-medium text-gray-300">Set Target Volume/Area</label>
+                    <input type="number" id="task-volume" class="form-input-dark mt-1 block w-full rounded-md shadow-sm" value="100">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label for="weather-factor" class="block text-sm font-medium text-gray-300">Weather Condition</label>
+                        <select id="weather-factor" class="form-input-dark mt-1 block w-full rounded-md shadow-sm">
+                            <option value="1.0">Dry</option> <option value="1.15">Wet</option> <option value="1.25">Muddy</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="material-density-factor" class="block text-sm font-medium text-gray-300">Material Density</label>
+                        <select id="material-density-factor" class="form-input-dark mt-1 block w-full rounded-md shadow-sm">
+                            <option value="0.9">Low (loose soil)</option><option value="1.0">Medium (gravel)</option><option value="1.2">High (compacted)</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="predict-btn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700">Predict Time with ML</button>
+            </div>
+            <div id="prediction-result" class="mt-4 text-center hidden"><p class="text-gray-300">Predicted Duration: <span id="pred-duration" class="font-bold text-xl text-yellow-400">--</span></p></div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button onclick="closeAddModal()" class="bg-gray-600 hover:bg-gray-500 font-semibold py-2 px-4 rounded-lg">Cancel</button>
+                <button id="save-task-btn" class="btn-cat-green py-2 px-4 rounded-lg" disabled>Add to Schedule</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="view-task-modal" class="modal-overlay hidden">
+        </div>
+
+
+    <script>
+        let currentDate = new Date();
+        let monthlyTasks = [];
+        let predefinedTasks = [];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchInitialData();
+            document.getElementById('prev-month-btn').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() - 1); renderCalendar(); });
+            document.getElementById('next-month-btn').addEventListener('click', () => { currentDate.setMonth(currentDate.getMonth() + 1); renderCalendar(); });
+            document.getElementById('predict-btn').addEventListener('click', getPrediction);
+            document.getElementById('save-task-btn').addEventListener('click', saveTask);
+            document.getElementById('task-select').addEventListener('change', updateTaskUnitLabel);
+        });
+
+        async function fetchInitialData() {
+            predefinedTasks = await fetch('/api/predefined_tasks').then(res => res.json());
+            const select = document.getElementById('task-select');
+            select.innerHTML = predefinedTasks.map(item => `<option value="${item.id}" data-unit="${item.task_unit}">${item.name}</option>`).join('');
+            updateTaskUnitLabel();
+            renderCalendar();
+        }
+
+        async function renderCalendar() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            document.getElementById('month-year-header').innerText = `${currentDate.toLocaleString('default', { month: 'long' })} ${year}`;
+            document.getElementById('schedule-list-month').innerText = currentDate.toLocaleString('default', { month: 'long' });
+            
+            await fetchTasksForMonth(year, month);
+            
+            const calendarBody = document.getElementById('calendar-body');
+            calendarBody.innerHTML = '';
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            
+            for (let i = 0; i < firstDay; i++) { calendarBody.innerHTML += `<div class="calendar-day other-month"></div>`; }
+            
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const tasksForDay = monthlyTasks.filter(t => t.day === dayStr);
+                
+                let taskHtml = tasksForDay.map(t => {
+                    const statusColor = t.status === 'Completed' ? 'bg-green-500' : (t.status === 'In Progress' ? 'bg-blue-500' : 'bg-gray-500');
+                    return `<div onclick="event.stopPropagation(); showTaskDetails('${t.id}')" class="task-item text-xs mt-1 p-1 bg-gray-700 rounded-sm truncate cursor-pointer hover:bg-gray-600 text-gray-200">
+                                <span class="h-2 w-2 ${statusColor} rounded-full inline-block mr-1"></span>${t.title}
+                            </div>`;
+                }).join('');
+
+                calendarBody.innerHTML += `<div class="calendar-day p-2 cursor-pointer hover:bg-gray-800" onclick="openAddModal('${dayStr}')"><span class="font-bold text-gray-300">${day}</span><div class="overflow-y-auto max-h-24">${taskHtml}</div></div>`;
+            }
+        }
+
+        async function fetchTasksForMonth(year, month) {
+            const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+            const response = await fetch(`/api/tasks_for_month?month=${monthStr}`);
+            if(response.ok) {
+                monthlyTasks = await response.json();
+                updateCurrentScheduleList();
+            } else {
+                console.error("Failed to fetch tasks for the month.");
+                monthlyTasks = [];
+            }
+        }
+
+        function updateCurrentScheduleList() {
+            const listEl = document.getElementById('current-schedule-list');
+            const sortedTasks = [...monthlyTasks].sort((a,b) => new Date(a.day) - new Date(b.day));
+            listEl.innerHTML = sortedTasks.length ? sortedTasks.map(t => `<div class="p-3 rounded-md bg-gray-800 border border-gray-700"><p class="font-bold text-gray-200">${t.title}</p><p class="text-sm text-gray-400">${new Date(t.day + 'T00:00:00').toLocaleDateString(undefined, { month: 'long', day: 'numeric'})} - <span class="font-semibold">${t.status}</span></p></div>`).join('') : '<p class="text-gray-500 text-center mt-4">No tasks scheduled for this month.</p>';
+        }
+
+        function updateTaskUnitLabel() {
+            const selectedOption = document.getElementById('task-select').selectedOptions[0];
+            const unit = selectedOption?.dataset.unit || 'units';
+            document.getElementById('task-volume-label').textContent = `Set Target Volume (${unit.replace(/_/g, ' ')})`;
+        }
+
+        function openAddModal(dayStr) {
+            document.getElementById('selected-day-input').value = dayStr;
+            document.getElementById('modal-date-display').innerText = new Date(dayStr + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+            document.getElementById('add-task-modal').classList.remove('hidden');
+        }
+
+        function closeAddModal() {
+            document.getElementById('add-task-modal').classList.add('hidden');
+            document.getElementById('prediction-result').classList.add('hidden');
+            document.getElementById('save-task-btn').disabled = true;
+        }
+
+        function showTaskDetails(taskId) {
+            const task = monthlyTasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            const unit = task.task_unit.replace(/_/g, ' ');
+            const statusColor = task.status === 'Completed' ? 'text-green-400' : (task.status === 'In Progress' ? 'text-blue-400' : 'text-gray-400');
+
+            const content = `
+                <div class="card p-8 w-full max-w-md" onclick="event.stopPropagation()">
+                    <div class="flex justify-between items-start">
+                        <h3 class="text-2xl font-bold mb-2 text-white">${task.title}</h3>
+                        <button onclick="closeViewModal()" class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-6">Scheduled for: ${new Date(task.day + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                    
+                    <div class="space-y-3 text-lg text-gray-300">
+                        <p><strong>Status:</strong> <span class="font-semibold ${statusColor}">${task.status}</span></p>
+                        <p><strong>Target:</strong> <span class="font-semibold text-white">${task.task_volume} ${unit}</span></p>
+                    </div>
+
+                    <div class="flex justify-end mt-8">
+                        <button onclick="closeViewModal()" class="bg-gray-600 hover:bg-gray-500 font-semibold py-2 px-4 rounded-lg">Close</button>
+                    </div>
+                </div>
+            `;
+            
+            const modal = document.getElementById('view-task-modal');
+            modal.innerHTML = content;
+            modal.classList.remove('hidden');
+            modal.setAttribute('onclick', 'closeViewModal()');
+        }
+
+        function closeViewModal() {
+            const modal = document.getElementById('view-task-modal');
+            modal.classList.add('hidden');
+            modal.innerHTML = '';
+        }
+
+        async function getPrediction() {
+            const payload = { 
+                predefined_task_id: document.getElementById('task-select').value,
+                task_type: document.getElementById('task-select').options[document.getElementById('task-select').selectedIndex].text,
+                task_volume: parseFloat(document.getElementById('task-volume').value),
+                weather_factor: parseFloat(document.getElementById('weather-factor').value),
+                material_density_factor: parseFloat(document.getElementById('material-density-factor').value),
+                day: document.getElementById('selected-day-input').value,
+             };
+            const response = await fetch('/api/predict/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const data = await response.json();
+            if (data.predicted_duration_minutes) {
+                const hours = Math.floor(data.predicted_duration_minutes / 60);
+                const minutes = Math.round(data.predicted_duration_minutes % 60);
+                document.getElementById('pred-duration').textContent = `${hours}h ${minutes}m`;
+                document.getElementById('prediction-result').classList.remove('hidden');
+                document.getElementById('save-task-btn').disabled = false;
+            }
+        }
+
+        async function saveTask() {
+            const payload = { 
+                predefined_task_id: document.getElementById('task-select').value,
+                day: document.getElementById('selected-day-input').value, 
+                task_volume: parseFloat(document.getElementById('task-volume').value), 
+                weather_factor: parseFloat(document.getElementById('weather-factor').value),
+                material_density_factor: parseFloat(document.getElementById('material-density-factor').value),
+            };
+            const response = await fetch('/api/tasks/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if(response.ok){
+                closeAddModal();
+                renderCalendar();
+            } else {
+                alert("Failed to save the task. Please try again.");
+            }
+        }
+    </script>
+</body>
+</html>
