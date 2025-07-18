@@ -123,6 +123,10 @@
     </div>
 
     <div id="modal-container"></div>
+    
+    <!-- CHANGED: Added audio element for the alert sound -->
+    <audio id="alert-sound" src="static\assets\emergency-alarm-with-reverb-29431.mp3" preload="auto"></audio>
+
     <svg width="0" height="0" style="position:absolute"><defs>
         <symbol id="icon-seatbelt" viewBox="0 0 24 24"><path fill="currentColor" d="M16,13.5L12,17.5L8,13.5H2V11.5H8.2L12,15.3L15.8,11.5H22V13.5H16M12,2L1,9H4V22H10V14H14V22H20V9H23L12,2Z"/></symbol>
         <symbol id="icon-tilt" viewBox="0 0 24 24"><path fill="currentColor" d="M2.7,14.3L5.5,19H18.5L21.3,14.3C21.7,13.5 21.2,12.5 20.4,12.5H3.6C2.8,12.5 2.3,13.5 2.7,14.3M18.8,11.5L16,5H8L5.2,11.5H18.8Z"/></symbol>
@@ -136,6 +140,8 @@
         let machineModel = '';
         let tasksToday = [];
         let currentTaskIndex = 0;
+        // CHANGED: Added state variable to track if an alert is active
+        let isAlertActive = false;
 
         document.addEventListener('DOMContentLoaded', () => {
             const user = JSON.parse(sessionStorage.getItem('user'));
@@ -260,10 +266,17 @@
             if (status.hydraulic_pressure < 2900) container.innerHTML += createAlertHtml('icon-hydraulic', 'Hydraulic', 'Pressure is critically low.');
             if (status.engine_temp > 108) container.innerHTML += createAlertHtml('icon-engine', 'Engine', 'Temperature is critical.');
 
+            // CHANGED: Logic to play sound only when an alert is newly triggered
             if (hasAlert) {
                 card.classList.add('alert-critical');
+                if (!isAlertActive) {
+                    // This is a new alert, play the sound
+                    document.getElementById('alert-sound').play().catch(e => console.error("Audio play failed:", e));
+                    isAlertActive = true; // Mark that an alert is now active
+                }
             } else {
                 container.innerHTML = `<div class="flex items-center p-3 rounded-lg bg-green-900 bg-opacity-50 text-green-200"><i class="fas fa-check-circle text-xl mr-4"></i><p class="font-bold">All Systems Nominal</p></div>`;
+                isAlertActive = false; // Reset the alert state when systems are nominal
             }
         }
 
